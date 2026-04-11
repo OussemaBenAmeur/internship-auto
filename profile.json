@@ -1,0 +1,203 @@
+{
+  "name": "Oussema Ben Ameur",
+  "email": "oussema.benameur@eniso.u-sousse.tn",
+  "phone": "+216 52 675 455",
+  "headline": "Software engineering student building ML, document AI, and backend systems",
+  "summary": "Second-year Software Engineering student at ENISo with hands-on experience in Machine Learning, MLOps, and full-stack development. Currently building document intelligence and computer vision systems at Core Techs Solutions.",
+  "university": "École Nationale d’Ingénieurs de Sousse - ENISo",
+  "degree": "Master’s-level degree in Software Engineering",
+  "graduation_year": 2027,
+  "availability": "Summer 2026",
+  "skills": [
+    "Python",
+    "C/C++",
+    "Java",
+    "JavaScript/TypeScript",
+    "PyTorch",
+    "Scikit-Learn",
+    "PaddleOCR",
+    "LayoutLM",
+    "Hugging Face Transformers",
+    "pandas",
+    "NumPy",
+    "Matplotlib",
+    "Seaborn",
+    "Statsmodels",
+    "Spring Boot",
+    "React",
+    "Flutter",
+    "Docker",
+    "Kubernetes",
+    "MLflow",
+    "Git/GitHub",
+    "LangChain"
+  ],
+  "interests": [
+    "machine learning engineering",
+    "computer vision",
+    "document intelligence",
+    "MLOps",
+    "backend engineering",
+    "full-stack product development",
+    "developer tooling"
+  ],
+  "value_pitch": [
+    "I can move from ML experimentation to production-grade engineering quickly.",
+    "I can bridge research code and runtime constraints, including native-performance integration work.",
+    "I am comfortable working across models, backend systems, and product integration."
+  ],
+  "projects": [
+    {
+      "name": "AI-Powered Writing Assistant Platform",
+      "summary": "Developed a full-stack application enabling users to draft emails and meeting summaries with bullet points, which AI elaborates into professional content.",
+      "skills": [
+        "Spring Boot",
+        "React",
+        "Flutter"
+      ],
+      "achievements": [
+        "Developed a full-stack application enabling users to draft emails and meeting summaries with bullet points, which AI elaborates into professional content.",
+        "Built the backend with Spring Boot and frontend with React, while creating a cross-platform mobile app using Flutter.",
+        "Fine-tuned an LLM on business communication data, improving tone alignment and contextual accuracy for email and meeting summary generation."
+      ]
+    },
+    {
+      "name": "Predictive Nutrient Availability Analysis and Sustainable Agriculture",
+      "summary": "Developed machine learning models to predict essential soil nutrients for optimizing maize crop yields in African farms.",
+      "skills": [],
+      "achievements": [
+        "Developed machine learning models to predict essential soil nutrients for optimizing maize crop yields in African farms.",
+        "Applied time-series analysis on environmental factors and satellite data (Sentinel and MODIS) to assess their impact on soil nutrient variability."
+      ]
+    },
+    {
+      "name": "Predictive Analysis for Play Store Market",
+      "summary": "Trained deep learning models with Keras on a 3M-row dataset to predict app install counts, using pandas, NumPy, and Matplotlib for analysis.",
+      "skills": [
+        "pandas",
+        "NumPy",
+        "Matplotlib"
+      ],
+      "achievements": [
+        "Trained deep learning models with Keras on a 3M-row dataset to predict app install counts, using pandas, NumPy, and Matplotlib for analysis.",
+        "Prototyped an AI-driven market research tool providing actionable insights on app performance for developers."
+      ]
+    }
+  ],
+  "experiences": [
+    {
+      "company": "Core Techs Solutions",
+      "title": "Part-Time Software Engineer",
+      "location": "Sousse, Tunisia",
+      "start_date": "September 2025",
+      "end_date": "Present",
+      "summary": "Built an end-to-end document extraction pipeline combining PaddleOCR, LayoutLM, and Qwen-VL with a RAG system for intelligent document querying.",
+      "skills": [
+        "Python",
+        "Java",
+        "PyTorch",
+        "PaddleOCR",
+        "LayoutLM",
+        "Spring Boot",
+        "Flutter",
+        "RAG",
+        "Qwen-VL"
+      ],
+      "achievements": [
+        "Built an end-to-end document extraction pipeline combining PaddleOCR, LayoutLM, and Qwen-VL with a RAG system for intelligent document querying.",
+        "Engineered a C++ inference layer with Java FFM bindings to run PaddleOCR and LayoutLM models natively in the JVM, eliminating Python dependency overhead.",
+        "Built and refined deep learning models in PyTorch for production computer vision applications.",
+        "Shipped features across mobile (Flutter) and backend (Spring Boot) services for company products."
+      ],
+      "kind": "work"
+    },
+    {
+      "company": "Core Techs Solutions",
+      "title": "Software Engineering Intern",
+      "location": "Sousse, Tunisia",
+      "start_date": "June 2025",
+      "end_date": "July 2025",
+      "summary": "Designed and trained a computer vision model to assess physical document condition — detecting folds, tears, and degradation for automated quality control.",
+      "skills": [
+        "PyTorch"
+      ],
+      "achievements": [
+        "Designed and trained a computer vision model to assess physical document condition — detecting folds, tears, and degradation for automated quality control.",
+        "Built data preprocessing and feature extraction pipelines in PyTorch, improving model accuracy over baseline."
+      ],
+      "kind": "work"
+    },
+    {
+      "company": "Electronica Club - ENISo",
+      "title": "AI Lead",
+      "location": "",
+      "start_date": "September 2025 – Present",
+      "end_date": "",
+      "summary": "Led both theoretical and practical workshops covering the fundamentals of Artificial Intelligence and Machine Learning.",
+      "skills": [],
+      "achievements": [
+        "Led both theoretical and practical workshops covering the fundamentals of Artificial Intelligence and Machine Learning.",
+        "Led and supported projects relying heavily on Machine Learning models and embedded software integration."
+      ],
+      "kind": "volunteer"
+    },
+    {
+      "company": "Volunteer",
+      "title": "Member of ENISo Junior Entreprise - JEENISo",
+      "location": "",
+      "start_date": "September 2024 – Present",
+      "end_date": "",
+      "summary": "Led marketing initiatives including content creation and visual identity design, while contributing to client prospection and outreach efforts for business development.",
+      "skills": [],
+      "achievements": [
+        "Led marketing initiatives including content creation and visual identity design, while contributing to client prospection and outreach efforts for business development."
+      ],
+      "kind": "volunteer"
+    },
+    {
+      "company": "Volunteer",
+      "title": "Moderator – School Partnership Program",
+      "location": "",
+      "start_date": "May 2025",
+      "end_date": "",
+      "summary": "Moderated the launch event of ENISo’s new Automotive Software Engineering program, held in the presence of representatives from GIZ, Deggendorf Institute of Technology (DIT), Dräxlmaier, and the German Embassy in Tunis.",
+      "skills": [],
+      "achievements": [
+        "Moderated the launch event of ENISo’s new Automotive Software Engineering program, held in the presence of representatives from GIZ, Deggendorf Institute of Technology (DIT), Dräxlmaier, and the German Embassy in Tunis.",
+        "Led discussions between industry leaders, professors, and school leadership to highlight the program’s vision of industry-aligned education and student career development in the automotive tech sector."
+      ],
+      "kind": "volunteer"
+    }
+  ],
+  "certifications": [
+    "Building RAG Agents with LLMs - NVIDIA",
+    "Machine Learning Specialization - DeepLearning.AI, Stanford University",
+    "Deep Learning - DeepLearning.AI",
+    "Hyperparameter Tuning - DeepLearning.AI",
+    "Natural Language Processing - DeepLearning.AI"
+  ],
+  "languages": [
+    "Arabic (Native)",
+    "English (C1)",
+    "French (B2)",
+    "German (B1)"
+  ],
+  "preferred_locations": [
+    "Tunisia",
+    "France",
+    "Remote"
+  ],
+  "target_roles": [
+    "Machine Learning Engineer Intern",
+    "Software Engineer Intern",
+    "Backend Engineer Intern",
+    "Computer Vision Intern",
+    "MLOps Intern",
+    "Full-Stack Engineer Intern"
+  ],
+  "links": {
+    "linkedin": "https://linkedin.com/in/oussema-ben-ameur",
+    "github": "https://github.com/OussemaBenAmeur",
+    "portfolio": "https://gnar-oba.vercel.app"
+  }
+}

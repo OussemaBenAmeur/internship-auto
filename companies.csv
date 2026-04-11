@@ -1,0 +1,4 @@
+company,role,location,contact_name,contact_email,job_url,priority,keywords,notes
+Stripe,Software Engineering Intern,Remote,,internships@stripe.com,https://stripe.com/jobs,high,"python,backend,api,payments","Focus on infrastructure or developer tools teams"
+Datadog,Backend Engineering Intern,Paris,,recruiting@datadoghq.com,https://careers.datadoghq.com,high,"python,distributed systems,observability","Mention interest in automation and metrics"
+Doctolib,Software Engineer Intern,Paris,Recruiting Team,,https://careers.doctolib.com,medium,"python,healthtech,product","Emphasize full-stack adaptability"
