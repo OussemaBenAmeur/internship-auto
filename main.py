@@ -4,6 +4,7 @@ import argparse
 import csv
 import json
 import re
+import sqlite3
 import subprocess
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
@@ -226,6 +227,9 @@ STOPWORDS = {
     "across",
 }
 
+APPLICATION_STATUSES = ("new", "drafted", "reviewed", "sent", "followed_up", "closed")
+ACTIVE_APPLICATION_STATUSES = ("new", "drafted", "reviewed", "sent", "followed_up")
+
 
 def slugify(value: str) -> str:
     slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
@@ -255,6 +259,12 @@ def parse_date(raw: str | None) -> date:
     return datetime.strptime(raw, "%Y-%m-%d").date()
 
 
+def parse_optional_date(raw: str | None) -> date | None:
+    if not raw:
+        return None
+    return parse_date(raw)
+
+
 def unique(items: Iterable[str]) -> list[str]:
     seen: set[str] = set()
     ordered: list[str] = []
@@ -272,6 +282,22 @@ def normalize_url(value: str) -> str:
     if value.startswith("http://") or value.startswith("https://"):
         return value
     return f"https://{value}"
+
+
+def serialize_list(items: Iterable[str]) -> str:
+    return json.dumps(list(items), ensure_ascii=False)
+
+
+def deserialize_list(raw: str) -> list[str]:
+    if not raw:
+        return []
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return parse_list(raw)
+    if isinstance(payload, list):
+        return [str(item) for item in payload if str(item).strip()]
+    return []
 
 
 def clean_pdf_lines(text: str) -> list[str]:
@@ -500,6 +526,517 @@ class TargetPackage:
     output_file: Path
 
 
+def build_lookup_key(target: CompanyTarget) -> str:
+    identity = target.job_url or "|".join(
+        [
+            compact_whitespace(target.company).lower(),
+            compact_whitespace(target.role).lower(),
+            compact_whitespace(target.location).lower(),
+            compact_whitespace(target.contact_email).lower(),
+        ]
+    )
+    return compact_whitespace(identity).lower()
+
+
+def default_tracker_db_path(output_dir: Path) -> Path:
+    return output_dir / "applications.db"
+
+
+def connect_tracker_db(path: Path) -> sqlite3.Connection:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    connection = sqlite3.connect(path)
+    connection.row_factory = sqlite3.Row
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS applications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            lookup_key TEXT NOT NULL UNIQUE,
+            company TEXT NOT NULL,
+            role TEXT NOT NULL,
+            location TEXT NOT NULL,
+            source TEXT NOT NULL,
+            contact_name TEXT NOT NULL,
+            contact_email TEXT NOT NULL,
+            job_url TEXT NOT NULL,
+            priority TEXT NOT NULL,
+            keywords TEXT NOT NULL,
+            notes TEXT NOT NULL,
+            match_score INTEGER NOT NULL,
+            matched_tracks TEXT NOT NULL,
+            matched_keywords TEXT NOT NULL,
+            pitch_angle TEXT NOT NULL,
+            fit_summary TEXT NOT NULL,
+            recommended_action TEXT NOT NULL,
+            email_subject TEXT NOT NULL,
+            email_body TEXT NOT NULL,
+            linkedin_message TEXT NOT NULL,
+            cover_note TEXT NOT NULL,
+            company_file TEXT NOT NULL,
+            search_google TEXT NOT NULL,
+            search_linkedin TEXT NOT NULL,
+            first_follow_up TEXT,
+            second_follow_up TEXT,
+            follow_up_due TEXT,
+            status TEXT NOT NULL DEFAULT 'new',
+            email_drafted INTEGER NOT NULL DEFAULT 0,
+            date_added TEXT NOT NULL,
+            date_updated TEXT NOT NULL,
+            date_applied TEXT,
+            last_follow_up_sent TEXT
+        )
+        """
+    )
+    connection.execute(
+        "CREATE INDEX IF NOT EXISTS idx_applications_status_follow_up ON applications(status, follow_up_due)"
+    )
+    return connection
+
+
+def package_to_application_row(package: TargetPackage, generated_at: date) -> dict[str, str | int | None]:
+    query = f"{package.target.company} {package.target.role} internship"
+    return {
+        "lookup_key": build_lookup_key(package.target),
+        "company": package.target.company,
+        "role": package.target.role,
+        "location": package.target.location,
+        "source": "manual_csv",
+        "contact_name": package.target.contact_name,
+        "contact_email": package.target.contact_email,
+        "job_url": package.target.job_url,
+        "priority": package.target.priority,
+        "keywords": serialize_list(package.target.keywords),
+        "notes": package.target.notes,
+        "match_score": package.match_score,
+        "matched_tracks": serialize_list(package.matched_tracks),
+        "matched_keywords": serialize_list(package.matched_keywords),
+        "pitch_angle": package.pitch_angle,
+        "fit_summary": package.fit_summary,
+        "recommended_action": package.recommended_action,
+        "email_subject": package.email_subject,
+        "email_body": package.email_body,
+        "linkedin_message": package.linkedin_message,
+        "cover_note": package.cover_note,
+        "company_file": package.output_file.name,
+        "search_google": f"https://www.google.com/search?q={quote_plus(query)}",
+        "search_linkedin": f"https://www.linkedin.com/search/results/all/?keywords={quote_plus(query)}",
+        "first_follow_up": package.follow_ups[0].isoformat() if package.follow_ups else None,
+        "second_follow_up": package.follow_ups[1].isoformat() if len(package.follow_ups) > 1 else None,
+        "follow_up_due": package.follow_ups[0].isoformat() if package.follow_ups else None,
+        "status": "new",
+        "email_drafted": 1,
+        "date_added": generated_at.isoformat(),
+        "date_updated": generated_at.isoformat(),
+        "date_applied": None,
+        "last_follow_up_sent": None,
+    }
+
+
+def sync_packages_to_tracker_db(db_path: Path, packages: list[TargetPackage], generated_at: date) -> tuple[int, int]:
+    connection = connect_tracker_db(db_path)
+    inserted = 0
+    updated = 0
+
+    with connection:
+        for package in packages:
+            row = package_to_application_row(package, generated_at)
+            existing = connection.execute(
+                "SELECT id, status, date_added, date_applied, last_follow_up_sent, follow_up_due FROM applications WHERE lookup_key = ?",
+                (row["lookup_key"],),
+            ).fetchone()
+
+            if existing:
+                follow_up_due = existing["follow_up_due"]
+                if not follow_up_due and existing["status"] != "closed":
+                    follow_up_due = row["first_follow_up"]
+
+                row.update(
+                    {
+                        "status": existing["status"],
+                        "date_added": existing["date_added"],
+                        "date_applied": existing["date_applied"],
+                        "last_follow_up_sent": existing["last_follow_up_sent"],
+                        "follow_up_due": follow_up_due,
+                    }
+                )
+                connection.execute(
+                    """
+                    UPDATE applications
+                    SET
+                        company = :company,
+                        role = :role,
+                        location = :location,
+                        source = :source,
+                        contact_name = :contact_name,
+                        contact_email = :contact_email,
+                        job_url = :job_url,
+                        priority = :priority,
+                        keywords = :keywords,
+                        notes = :notes,
+                        match_score = :match_score,
+                        matched_tracks = :matched_tracks,
+                        matched_keywords = :matched_keywords,
+                        pitch_angle = :pitch_angle,
+                        fit_summary = :fit_summary,
+                        recommended_action = :recommended_action,
+                        email_subject = :email_subject,
+                        email_body = :email_body,
+                        linkedin_message = :linkedin_message,
+                        cover_note = :cover_note,
+                        company_file = :company_file,
+                        search_google = :search_google,
+                        search_linkedin = :search_linkedin,
+                        first_follow_up = :first_follow_up,
+                        second_follow_up = :second_follow_up,
+                        follow_up_due = :follow_up_due,
+                        status = :status,
+                        email_drafted = :email_drafted,
+                        date_added = :date_added,
+                        date_updated = :date_updated,
+                        date_applied = :date_applied,
+                        last_follow_up_sent = :last_follow_up_sent
+                    WHERE lookup_key = :lookup_key
+                    """,
+                    row,
+                )
+                updated += 1
+                continue
+
+            connection.execute(
+                """
+                INSERT INTO applications (
+                    lookup_key,
+                    company,
+                    role,
+                    location,
+                    source,
+                    contact_name,
+                    contact_email,
+                    job_url,
+                    priority,
+                    keywords,
+                    notes,
+                    match_score,
+                    matched_tracks,
+                    matched_keywords,
+                    pitch_angle,
+                    fit_summary,
+                    recommended_action,
+                    email_subject,
+                    email_body,
+                    linkedin_message,
+                    cover_note,
+                    company_file,
+                    search_google,
+                    search_linkedin,
+                    first_follow_up,
+                    second_follow_up,
+                    follow_up_due,
+                    status,
+                    email_drafted,
+                    date_added,
+                    date_updated,
+                    date_applied,
+                    last_follow_up_sent
+                ) VALUES (
+                    :lookup_key,
+                    :company,
+                    :role,
+                    :location,
+                    :source,
+                    :contact_name,
+                    :contact_email,
+                    :job_url,
+                    :priority,
+                    :keywords,
+                    :notes,
+                    :match_score,
+                    :matched_tracks,
+                    :matched_keywords,
+                    :pitch_angle,
+                    :fit_summary,
+                    :recommended_action,
+                    :email_subject,
+                    :email_body,
+                    :linkedin_message,
+                    :cover_note,
+                    :company_file,
+                    :search_google,
+                    :search_linkedin,
+                    :first_follow_up,
+                    :second_follow_up,
+                    :follow_up_due,
+                    :status,
+                    :email_drafted,
+                    :date_added,
+                    :date_updated,
+                    :date_applied,
+                    :last_follow_up_sent
+                )
+                """,
+                row,
+            )
+            inserted += 1
+
+    connection.close()
+    return inserted, updated
+
+
+def export_tracker_csv_from_db(db_path: Path, csv_path: Path) -> None:
+    connection = connect_tracker_db(db_path)
+    rows = connection.execute(
+        """
+        SELECT
+            company,
+            role,
+            priority,
+            status,
+            match_score,
+            matched_tracks,
+            pitch_angle,
+            contact_name,
+            contact_email,
+            job_url,
+            recommended_action,
+            first_follow_up,
+            second_follow_up,
+            follow_up_due,
+            date_applied,
+            matched_keywords,
+            company_file,
+            search_google,
+            search_linkedin
+        FROM applications
+        ORDER BY
+            CASE priority
+                WHEN 'high' THEN 0
+                WHEN 'medium' THEN 1
+                WHEN 'low' THEN 2
+                ELSE 3
+            END,
+            match_score DESC,
+            company ASC
+        """
+    ).fetchall()
+    connection.close()
+
+    fieldnames = [
+        "company",
+        "role",
+        "priority",
+        "status",
+        "match_score",
+        "matched_tracks",
+        "pitch_angle",
+        "contact_name",
+        "contact_email",
+        "job_url",
+        "recommended_action",
+        "follow_up_1",
+        "follow_up_2",
+        "follow_up_due",
+        "date_applied",
+        "matched_keywords",
+        "company_file",
+        "search_google",
+        "search_linkedin",
+    ]
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow(
+                {
+                    "company": row["company"],
+                    "role": row["role"],
+                    "priority": row["priority"],
+                    "status": row["status"],
+                    "match_score": row["match_score"],
+                    "matched_tracks": ", ".join(deserialize_list(row["matched_tracks"])),
+                    "pitch_angle": row["pitch_angle"],
+                    "contact_name": row["contact_name"],
+                    "contact_email": row["contact_email"],
+                    "job_url": row["job_url"],
+                    "recommended_action": row["recommended_action"],
+                    "follow_up_1": row["first_follow_up"],
+                    "follow_up_2": row["second_follow_up"],
+                    "follow_up_due": row["follow_up_due"],
+                    "date_applied": row["date_applied"],
+                    "matched_keywords": ", ".join(deserialize_list(row["matched_keywords"])),
+                    "company_file": row["company_file"],
+                    "search_google": row["search_google"],
+                    "search_linkedin": row["search_linkedin"],
+                }
+            )
+
+
+def fetch_applications(
+    db_path: Path,
+    statuses: list[str] | None = None,
+    *,
+    limit: int | None = None,
+    due_on_or_before: date | None = None,
+    include_closed: bool = False,
+) -> list[sqlite3.Row]:
+    connection = connect_tracker_db(db_path)
+    conditions: list[str] = []
+    parameters: list[str | int] = []
+
+    if statuses:
+        placeholders = ", ".join("?" for _ in statuses)
+        conditions.append(f"status IN ({placeholders})")
+        parameters.extend(statuses)
+    elif not include_closed:
+        placeholders = ", ".join("?" for _ in ACTIVE_APPLICATION_STATUSES)
+        conditions.append(f"status IN ({placeholders})")
+        parameters.extend(ACTIVE_APPLICATION_STATUSES)
+
+    if due_on_or_before:
+        conditions.append("follow_up_due IS NOT NULL AND follow_up_due <= ?")
+        parameters.append(due_on_or_before.isoformat())
+
+    query = """
+        SELECT *
+        FROM applications
+    """
+    if conditions:
+        query += " WHERE " + " AND ".join(conditions)
+    query += """
+        ORDER BY
+            CASE priority
+                WHEN 'high' THEN 0
+                WHEN 'medium' THEN 1
+                WHEN 'low' THEN 2
+                ELSE 3
+            END,
+            match_score DESC,
+            company ASC
+    """
+    if limit is not None:
+        query += " LIMIT ?"
+        parameters.append(limit)
+
+    rows = connection.execute(query, parameters).fetchall()
+    connection.close()
+    return rows
+
+
+def get_application_by_id(db_path: Path, application_id: int) -> sqlite3.Row | None:
+    connection = connect_tracker_db(db_path)
+    row = connection.execute("SELECT * FROM applications WHERE id = ?", (application_id,)).fetchone()
+    connection.close()
+    return row
+
+
+def choose_default_follow_up(row: sqlite3.Row, new_status: str, changed_on: date) -> str | None:
+    if new_status == "sent":
+        first_follow_up = row["first_follow_up"]
+        if first_follow_up and first_follow_up >= changed_on.isoformat():
+            return first_follow_up
+        return (changed_on + timedelta(days=5)).isoformat()
+    if new_status == "followed_up":
+        second_follow_up = row["second_follow_up"]
+        if second_follow_up and second_follow_up > changed_on.isoformat():
+            return second_follow_up
+        return (changed_on + timedelta(days=7)).isoformat()
+    if new_status == "closed":
+        return None
+    return row["follow_up_due"]
+
+
+def update_application_status(
+    db_path: Path,
+    application_id: int,
+    new_status: str,
+    *,
+    changed_on: date,
+    follow_up_due: date | None = None,
+) -> None:
+    if new_status not in APPLICATION_STATUSES:
+        raise SystemExit(f"Invalid status '{new_status}'. Valid values: {', '.join(APPLICATION_STATUSES)}")
+
+    connection = connect_tracker_db(db_path)
+    row = connection.execute("SELECT * FROM applications WHERE id = ?", (application_id,)).fetchone()
+    if not row:
+        connection.close()
+        raise SystemExit(f"Application id {application_id} was not found in {db_path}.")
+
+    applied_value = row["date_applied"]
+    if new_status in {"sent", "followed_up", "closed"} and not applied_value:
+        applied_value = changed_on.isoformat()
+
+    next_follow_up = follow_up_due.isoformat() if follow_up_due else choose_default_follow_up(row, new_status, changed_on)
+    last_follow_up_sent = row["last_follow_up_sent"]
+    if new_status == "followed_up":
+        last_follow_up_sent = changed_on.isoformat()
+    elif new_status in {"new", "drafted", "reviewed"}:
+        last_follow_up_sent = None
+
+    with connection:
+        connection.execute(
+            """
+            UPDATE applications
+            SET
+                status = ?,
+                follow_up_due = ?,
+                date_applied = ?,
+                last_follow_up_sent = ?,
+                date_updated = ?
+            WHERE id = ?
+            """,
+            (
+                new_status,
+                next_follow_up,
+                applied_value,
+                last_follow_up_sent,
+                changed_on.isoformat(),
+                application_id,
+            ),
+        )
+    connection.close()
+
+
+def print_queue(rows: list[sqlite3.Row]) -> None:
+    if not rows:
+        print("No applications matched the requested filters.")
+        return
+
+    for row in rows:
+        follow_up = row["follow_up_due"] or "-"
+        print(
+            f"[{row['id']}] {row['company']} | {row['role']} | {row['status']} | "
+            f"priority {row['priority']} | score {row['match_score']} | follow-up {follow_up}"
+        )
+
+
+def print_review(row: sqlite3.Row) -> None:
+    matched_tracks = ", ".join(deserialize_list(row["matched_tracks"])) or "-"
+    matched_keywords = ", ".join(deserialize_list(row["matched_keywords"])) or "-"
+    keywords = ", ".join(deserialize_list(row["keywords"])) or "-"
+    print(f"Application {row['id']}")
+    print(f"{row['company']} | {row['role']} | {row['status']}")
+    print(f"Priority: {row['priority']} | Match score: {row['match_score']} | Source: {row['source']}")
+    print(f"Location: {row['location'] or '-'}")
+    print(f"Contact: {row['contact_name'] or '-'} | {row['contact_email'] or '-'}")
+    print(f"Job URL: {row['job_url'] or '-'}")
+    print(f"Notes: {row['notes'] or '-'}")
+    print(f"Keywords: {keywords}")
+    print(f"Matched tracks: {matched_tracks}")
+    print(f"Matched keywords: {matched_keywords}")
+    print(f"Recommended action: {row['recommended_action']}")
+    print(f"Follow-up plan: {row['first_follow_up'] or '-'} then {row['second_follow_up'] or '-'}")
+    print(f"Current due date: {row['follow_up_due'] or '-'}")
+    print(f"Company file: {row['company_file']}")
+    print("")
+    print(f"Subject: {row['email_subject']}")
+    print("")
+    print("Email draft:")
+    print(row["email_body"])
+    print("")
+    print("LinkedIn draft:")
+    print(row["linkedin_message"])
+    print("")
+    print("Cover note:")
+    print(row["cover_note"])
 def load_profile(path: Path) -> CandidateProfile:
     payload = json.loads(path.read_text(encoding="utf-8"))
     return CandidateProfile.from_dict(payload)
@@ -1251,7 +1788,13 @@ def import_cv(cv_path: Path, output_path: Path, availability: str, force: bool) 
     print(f"Wrote CV-based profile to {output_path}")
 
 
-def run_pipeline(profile_path: Path, companies_path: Path, output_dir: Path, campaign_start: date) -> None:
+def run_pipeline(
+    profile_path: Path,
+    companies_path: Path,
+    output_dir: Path,
+    campaign_start: date,
+    tracker_db_path: Path | None,
+) -> None:
     profile = load_profile(profile_path)
     targets = load_targets(companies_path)
     if not targets:
@@ -1266,11 +1809,14 @@ def run_pipeline(profile_path: Path, companies_path: Path, output_dir: Path, cam
     for package in packages:
         package.output_file.write_text(format_company_page(package), encoding="utf-8")
 
-    write_csv_tracker(output_dir / "tracker.csv", packages)
+    db_path = tracker_db_path or default_tracker_db_path(output_dir)
+    inserted, updated = sync_packages_to_tracker_db(db_path, packages, campaign_start)
+    export_tracker_csv_from_db(db_path, output_dir / "tracker.csv")
     (output_dir / "dashboard.md").write_text(build_dashboard(packages, campaign_start), encoding="utf-8")
     (output_dir / "followups.ics").write_text(build_calendar(packages), encoding="utf-8")
 
     print(f"Generated {len(packages)} target packages in {output_dir}")
+    print(f"Tracker DB: {db_path} ({inserted} inserted, {updated} updated)")
     print(f"Tracker: {output_dir / 'tracker.csv'}")
     print(f"Dashboard: {output_dir / 'dashboard.md'}")
     print(f"Calendar: {output_dir / 'followups.ics'}")
@@ -1290,6 +1836,52 @@ def show_status(tracker_path: Path) -> None:
         print(
             f"- {row['company']} | {row['role']} | score {row['match_score']} | "
             f"angle: {row['pitch_angle']} | follow-up {row['follow_up_1']}"
+        )
+
+
+def show_status_from_db(db_path: Path, limit: int) -> None:
+    rows = fetch_applications(db_path, include_closed=True, limit=limit)
+    if not rows:
+        print("Tracker database is empty.")
+        return
+
+    print("Top internship targets:")
+    for row in rows:
+        print(
+            f"- [{row['id']}] {row['company']} | {row['role']} | {row['status']} | "
+            f"score {row['match_score']} | follow-up {row['follow_up_due'] or '-'}"
+        )
+
+
+def show_queue(db_path: Path, statuses: list[str] | None, limit: int) -> None:
+    rows = fetch_applications(db_path, statuses=statuses, limit=limit)
+    print_queue(rows)
+
+
+def review_application(db_path: Path, application_id: int | None, statuses: list[str] | None) -> None:
+    row = get_application_by_id(db_path, application_id) if application_id is not None else None
+    if application_id is not None and row is None:
+        raise SystemExit(f"Application id {application_id} was not found in {db_path}.")
+    if row is None:
+        rows = fetch_applications(db_path, statuses=statuses or ["new", "drafted", "reviewed"], limit=1)
+        row = rows[0] if rows else None
+    if row is None:
+        print("No applications are waiting for review.")
+        return
+    print_review(row)
+
+
+def show_due_followups(db_path: Path, as_of: date) -> None:
+    rows = fetch_applications(db_path, statuses=["sent", "followed_up"], due_on_or_before=as_of)
+    if not rows:
+        print(f"No follow-ups due on or before {as_of.isoformat()}.")
+        return
+
+    print(f"Follow-ups due on or before {as_of.isoformat()}:")
+    for row in rows:
+        print(
+            f"- [{row['id']}] {row['company']} | {row['role']} | due {row['follow_up_due']} | "
+            f"status {row['status']} | contact {row['contact_email'] or '-'}"
         )
 
 
@@ -1313,6 +1905,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--companies", type=Path, default=Path("companies.csv"))
     run_parser.add_argument("--output", type=Path, default=Path("out"))
     run_parser.add_argument(
+        "--db",
+        type=Path,
+        default=None,
+        help="SQLite tracker path. Defaults to <output>/applications.db.",
+    )
+    run_parser.add_argument(
         "--campaign-start",
         type=str,
         default=None,
@@ -1321,6 +1919,56 @@ def build_parser() -> argparse.ArgumentParser:
 
     status_parser = subparsers.add_parser("status", help="Show the top opportunities from a generated tracker.")
     status_parser.add_argument("--tracker", type=Path, default=Path("out/tracker.csv"))
+    status_parser.add_argument("--db", type=Path, default=Path("out/applications.db"))
+    status_parser.add_argument("--limit", type=int, default=5)
+
+    queue_parser = subparsers.add_parser("queue", help="List applications from the SQLite tracker.")
+    queue_parser.add_argument("--db", type=Path, default=Path("out/applications.db"))
+    queue_parser.add_argument(
+        "--status",
+        action="append",
+        dest="statuses",
+        choices=APPLICATION_STATUSES,
+        help="Filter by status. Repeat to include multiple statuses.",
+    )
+    queue_parser.add_argument("--limit", type=int, default=20)
+
+    review_parser = subparsers.add_parser("review", help="Print one application draft and its context.")
+    review_parser.add_argument("--db", type=Path, default=Path("out/applications.db"))
+    review_parser.add_argument("--id", type=int, default=None, help="Application id to review.")
+    review_parser.add_argument(
+        "--status",
+        action="append",
+        dest="statuses",
+        choices=APPLICATION_STATUSES,
+        help="Fallback status filter when --id is not provided.",
+    )
+
+    update_parser = subparsers.add_parser("set-status", help="Update one application's status in the SQLite tracker.")
+    update_parser.add_argument("--db", type=Path, default=Path("out/applications.db"))
+    update_parser.add_argument("--id", type=int, required=True, help="Application id from `queue` or `review`.")
+    update_parser.add_argument("--status", required=True, choices=APPLICATION_STATUSES)
+    update_parser.add_argument(
+        "--changed-on",
+        type=str,
+        default=None,
+        help="Date for the status change in YYYY-MM-DD format. Defaults to today.",
+    )
+    update_parser.add_argument(
+        "--follow-up-due",
+        type=str,
+        default=None,
+        help="Override the next follow-up date in YYYY-MM-DD format.",
+    )
+
+    followups_parser = subparsers.add_parser("followups", help="List sent applications whose follow-up is due.")
+    followups_parser.add_argument("--db", type=Path, default=Path("out/applications.db"))
+    followups_parser.add_argument(
+        "--as-of",
+        type=str,
+        default=None,
+        help="Show follow-ups due on or before this date in YYYY-MM-DD format. Defaults to today.",
+    )
 
     return parser
 
@@ -1342,13 +1990,48 @@ def main() -> None:
     if args.command == "run":
         if not args.profile.exists() or not args.companies.exists():
             raise SystemExit("Missing profile or companies file. Run `python3 main.py init` or `python3 main.py import-cv` first.")
-        run_pipeline(args.profile, args.companies, args.output, parse_date(args.campaign_start))
+        run_pipeline(args.profile, args.companies, args.output, parse_date(args.campaign_start), args.db)
         return
 
     if args.command == "status":
+        if args.db.exists():
+            show_status_from_db(args.db, args.limit)
+            return
         if not args.tracker.exists():
-            raise SystemExit("Tracker file not found. Run `python3 main.py run` first.")
+            raise SystemExit("Tracker not found. Run `python3 main.py run` first.")
         show_status(args.tracker)
+        return
+
+    if args.command == "queue":
+        if not args.db.exists():
+            raise SystemExit("Tracker DB not found. Run `python3 main.py run` first.")
+        show_queue(args.db, args.statuses, args.limit)
+        return
+
+    if args.command == "review":
+        if not args.db.exists():
+            raise SystemExit("Tracker DB not found. Run `python3 main.py run` first.")
+        review_application(args.db, args.id, args.statuses)
+        return
+
+    if args.command == "set-status":
+        if not args.db.exists():
+            raise SystemExit("Tracker DB not found. Run `python3 main.py run` first.")
+        update_application_status(
+            args.db,
+            args.id,
+            args.status,
+            changed_on=parse_date(args.changed_on),
+            follow_up_due=parse_optional_date(args.follow_up_due),
+        )
+        export_tracker_csv_from_db(args.db, args.db.parent / "tracker.csv")
+        print(f"Updated application {args.id} to {args.status}.")
+        return
+
+    if args.command == "followups":
+        if not args.db.exists():
+            raise SystemExit("Tracker DB not found. Run `python3 main.py run` first.")
+        show_due_followups(args.db, parse_date(args.as_of))
         return
 
     raise SystemExit("Unknown command.")
